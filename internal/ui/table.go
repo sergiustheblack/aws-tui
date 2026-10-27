@@ -35,11 +35,32 @@ func NewTable(headers []string, fixedRows, fixedCols int) *Table {
 }
 
 func (t *Table) SetData(data [][]string) {
-	// TODO handle changing data size
+	for t.GetRowCount() > len(data)+1 {
+		t.RemoveRow(t.GetRowCount() - 1)
+	}
 	for r, v := range data {
 		for c, vv := range v {
 			t.SetCell(r+1, c, tview.NewTableCell(vv))
 		}
+	}
+}
+
+func (t *Table) GetHeaders() []string {
+	return t.headers
+}
+
+// SetSortIndicator marks the header of column col with the sort direction.
+// A negative col clears the indicator.
+func (t *Table) SetSortIndicator(col int, desc bool) {
+	for i, h := range t.headers {
+		if i == col {
+			if desc {
+				h += " ↓"
+			} else {
+				h += " ↑"
+			}
+		}
+		t.SetCell(0, i, tview.NewTableCell(h))
 	}
 }
 

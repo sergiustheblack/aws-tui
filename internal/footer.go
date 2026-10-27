@@ -1,8 +1,10 @@
 package internal
 
 import (
-	"github.com/rivo/tview"
+	"fmt"
 	"strings"
+
+	"github.com/rivo/tview"
 )
 
 type Footer struct {
@@ -27,5 +29,10 @@ func (f Footer) Render() {
 		names = append(names, v.GetLabels()...)
 	}
 	str := strings.Join(names, " > ")
+	if n := len(f.app.components); n > 0 {
+		if v, ok := f.app.components[n-1].(Filterable); ok && v.GetFilter() != "" {
+			str += fmt.Sprintf("  [yellow]/%v[white]", tview.Escape(v.GetFilter()))
+		}
+	}
 	f.SetText(str)
 }

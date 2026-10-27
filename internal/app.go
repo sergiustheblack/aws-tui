@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	aws "github.com/aws/aws-sdk-go-v2/aws"
@@ -40,15 +41,17 @@ import (
 )
 
 type Application struct {
-	app        *tview.Application
-	pages      *tview.Pages
-	header     *Header
-	footer     *Footer
-	components []Component
-	region     string
-	profile    string
-	ctx        context.Context
-	cancel     context.CancelFunc
+	app         *tview.Application
+	pages       *tview.Pages
+	layout      *tview.Flex
+	header      *Header
+	footer      *Footer
+	filterInput *tview.InputField
+	components  []Component
+	region      string
+	profile     string
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 func buildRepos(cfg aws.Config) (Repos, *repo.STS) {
@@ -115,8 +118,36 @@ func buildRepos(cfg aws.Config) (Repos, *repo.STS) {
 	return repos, stsRepo
 }
 
+// defaultRegion is used when neither the environment nor the profile in the
+// shared config file sets a region.
+const defaultRegion = "us-east-1"
+
+// loadConfig loads the AWS config the same way the AWS CLI does, honoring
+// AWS_PROFILE, AWS_REGION, AWS_CONFIG_FILE etc. A non-empty profile or region
+// overrides the environment, like --profile and --region do.
+func loadConfig(profile, region string) (aws.Config, error) {
+	opts := []func(*config.LoadOptions) error{
+		config.WithDefaultRegion(defaultRegion),
+	}
+	if profile != "" {
+		opts = append(opts, config.WithSharedConfigProfile(profile))
+	}
+	if region != "" {
+		opts = append(opts, config.WithRegion(region))
+	}
+	return config.LoadDefaultConfig(context.TODO(), opts...)
+}
+
+// envProfile returns the profile selected by the environment, if any.
+func envProfile() string {
+	if p := os.Getenv("AWS_PROFILE"); p != "" {
+		return p
+	}
+	return os.Getenv("AWS_DEFAULT_PROFILE")
+}
+
 func NewApplication() *Application {
-	cfg, err := config.LoadDefaultConfig(context.TODO())
+	cfg, err := loadConfig("", "")
 	if err != nil {
 		panic(err)
 	}
@@ -124,7 +155,8 @@ func NewApplication() *Application {
 	repos, stsRepo := buildRepos(cfg)
 
 	a := &Application{
-		region: cfg.Region,
+		region:  cfg.Region,
+		profile: envProfile(),
 	}
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 
@@ -144,44 +176,58 @@ func NewApplication() *Application {
 	tviewApp.SetRoot(flex, true).SetFocus(pages)
 	a.app = tviewApp
 	a.pages = pages
+	a.layout = flex
 	a.header = header
 	a.footer = footer
 	a.AddAndSwitch(NewServices(repos, a))
 
-	tviewApp.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		frontName, _ := a.pages.GetFrontPage()
-
-		// dismiss overlays with Escape without disturbing the navigation stack
-		if frontName == "picker" || frontName == "error" {
-			if event.Key() == tcell.KeyEscape {
-				a.pages.RemovePage(frontName)
-				a.app.SetFocus(a.pages)
-				return nil
-			}
-			return event
-		}
-
-		if event.Key() == tcell.KeyEscape {
-			a.Close()
-			return nil
-		}
-
-		// pass down Enter keypress to the component
-		if event.Key() == tcell.KeyEnter {
-			return event
-		}
-
-		actions := a.GetActiveKeyActions()
-		for _, action := range actions {
-			if event.Name() == action.Key.Name() {
-				action.Action()
-				return nil
-			}
-		}
-		return event
-	})
+	tviewApp.SetInputCapture(a.handleKey)
 
 	return a
+}
+
+func (a *Application) handleKey(event *tcell.EventKey) *tcell.EventKey {
+	// the filter input handles its own keys, including Enter and Escape
+	if a.filterInput != nil {
+		return event
+	}
+
+	frontName, _ := a.pages.GetFrontPage()
+
+	// dismiss overlays with Escape without disturbing the navigation stack
+	if frontName == "picker" || frontName == "error" {
+		if event.Key() == tcell.KeyEscape {
+			a.pages.RemovePage(frontName)
+			a.app.SetFocus(a.pages)
+			return nil
+		}
+		return event
+	}
+
+	if event.Key() == tcell.KeyEscape {
+		// clear an active filter before leaving the view
+		if f, ok := a.components[len(a.components)-1].(Filterable); ok && f.GetFilter() != "" {
+			f.SetFilter("")
+			a.footer.Render()
+			return nil
+		}
+		a.Close()
+		return nil
+	}
+
+	// pass down Enter keypress to the component
+	if event.Key() == tcell.KeyEnter {
+		return event
+	}
+
+	actions := a.GetActiveKeyActions()
+	for _, action := range actions {
+		if event.Name() == action.Key.Name() {
+			action.Action()
+			return nil
+		}
+	}
+	return event
 }
 
 func (a *Application) GetRegion() string {
@@ -192,15 +238,7 @@ func (a *Application) rebuild(profile, region string) {
 	a.cancel()
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 
-	opts := []func(*config.LoadOptions) error{}
-	if profile != "" {
-		opts = append(opts, config.WithSharedConfigProfile(profile))
-	}
-	if region != "" {
-		opts = append(opts, config.WithRegion(region))
-	}
-
-	cfg, err := config.LoadDefaultConfig(context.TODO(), opts...)
+	cfg, err := loadConfig(profile, region)
 	if err != nil {
 		a.ShowError(err)
 		return
@@ -229,6 +267,16 @@ func (a *Application) rebuild(profile, region string) {
 		}
 	}
 
+	a.clearPages()
+
+	a.AddAndSwitch(NewServices(repos, a))
+	if resumeKey != "" {
+		a.AddAndSwitch(registry[resumeKey](repos, a))
+	}
+}
+
+// clearPages removes all components from the navigation stack.
+func (a *Application) clearPages() {
 	for a.pages.GetPageCount() > 0 {
 		name, _ := a.pages.GetFrontPage()
 		if name == "" {
@@ -236,12 +284,12 @@ func (a *Application) rebuild(profile, region string) {
 		}
 		a.pages.RemovePage(name)
 	}
+	// Once it has no pages left, tview.Pages focuses its own box without the
+	// application knowing, so it never gets blurred and keeps claiming focus
+	// over e.g. the filter input. Focusing it properly lets the next added
+	// page take over the focus.
+	a.app.SetFocus(a.pages)
 	a.components = nil
-
-	a.AddAndSwitch(NewServices(repos, a))
-	if resumeKey != "" {
-		a.AddAndSwitch(registry[resumeKey](repos, a))
-	}
 }
 
 func (a *Application) ShowError(err error) {
@@ -288,7 +336,46 @@ func (a *Application) GetActiveKeyActions() []KeyAction {
 			Action:      a.showProfilePicker,
 		},
 	}
+	if filterable, ok := primitive.(Filterable); ok {
+		globalActions = append(globalActions, KeyAction{
+			Key:         tcell.NewEventKey(tcell.KeyRune, '/', tcell.ModNone),
+			Description: "Filter",
+			Action:      func() { a.showFilter(filterable) },
+		})
+	}
+	if sortable, ok := primitive.(Sortable); ok {
+		globalActions = append(globalActions, KeyAction{
+			Key:         tcell.NewEventKey(tcell.KeyRune, 'S', tcell.ModNone),
+			Description: "Sort",
+			Action:      func() { a.showSortPicker(sortable) },
+		})
+	}
 	return append(localActions, globalActions...)
+}
+
+// showFilter replaces the footer with an input that filters f as you type.
+// Enter keeps the filter, Escape clears it.
+func (a *Application) showFilter(f Filterable) {
+	input := tview.NewInputField().
+		SetLabel("/").
+		SetText(f.GetFilter()).
+		SetFieldBackgroundColor(tcell.ColorDefault).
+		SetLabelColor(tcell.ColorYellow)
+	input.SetChangedFunc(f.SetFilter)
+	input.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEscape {
+			f.SetFilter("")
+		}
+		a.layout.RemoveItem(input)
+		a.layout.AddItem(a.footer, 1, 0, false)
+		a.filterInput = nil
+		a.app.SetFocus(a.pages)
+		a.footer.Render()
+	})
+	a.layout.RemoveItem(a.footer)
+	a.layout.AddItem(input, 1, 0, true)
+	a.filterInput = input
+	a.app.SetFocus(input)
 }
 
 func (a *Application) AddAndSwitch(v Component) {
