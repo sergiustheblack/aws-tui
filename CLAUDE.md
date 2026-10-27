@@ -3,6 +3,10 @@
 Fork of [bporter816/aws-tui](https://github.com/bporter816/aws-tui): a k9s-style
 terminal UI for AWS, written in Go with tview/tcell and AWS SDK v2.
 
+Remotes: `origin` = the fork (git@github.com:sergiustheblack/aws-tui.git, work
+goes to `main`), `upstream` = the original repo (pull updates with
+`git fetch upstream && git merge upstream/main`).
+
 ## Build & test
 
 There is no Go toolchain on the host; everything runs in Docker.
