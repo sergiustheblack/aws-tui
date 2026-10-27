@@ -23,6 +23,15 @@ A k9s-inspired terminal UI for AWS services. Supports:
 * Service Quotas
 * VPC
 
-Note: There is a dependency on the AWS CLI for operations that are not easily supported by the AWS Go SDK:
-* determining the default region for the current profile
-* listing profiles (not used yet)
+## Keys
+
+* `Ctrl+G` / `Ctrl+P` – switch region / profile; type to narrow the list
+* `S` – sort by a column (pick the same column again to reverse)
+* `/` – filter rows; `Enter` keeps the filter, `Esc` clears it
+* `Ctrl+R` – refresh, `Esc` – back
+
+## Configuration
+
+Credentials, profile and region are resolved like the AWS CLI does: `AWS_PROFILE`, `AWS_REGION`,
+`AWS_DEFAULT_REGION`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE` etc. and `~/.aws/config` are
+honored. If no region is configured, `us-east-1` is used.
