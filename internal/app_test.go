@@ -10,8 +10,8 @@ import (
 	"github.com/rivo/tview"
 )
 
-// newTestApplication runs an Application with the given component on a
-// simulated screen. It skips the header, which needs AWS access.
+// newTestApplication runs an Application with the given component (if any)
+// on a simulated screen. It skips the header, which needs AWS access.
 func newTestApplication(t *testing.T, c Component) (*Application, tcell.SimulationScreen) {
 	t.Helper()
 	screen := tcell.NewSimulationScreen("UTF-8")
@@ -30,9 +30,18 @@ func newTestApplication(t *testing.T, c Component) (*Application, tcell.Simulati
 	a.layout.AddItem(a.pages, 0, 1, true)
 	a.layout.AddItem(a.footer, 1, 0, false)
 	a.app.SetScreen(screen).SetRoot(a.layout, true).SetFocus(a.pages)
-	a.app.SetInputCapture(a.handleKey)
+	// let typeKeys know when a key has reached the event loop
+	handled := make(chan struct{}, 1)
+	keysHandled[a] = handled
+	t.Cleanup(func() { delete(keysHandled, a) })
+	a.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		handled <- struct{}{}
+		return a.handleKey(event)
+	})
 
-	addComponent(t, a, c)
+	if c != nil {
+		addComponent(t, a, c)
+	}
 
 	done := make(chan error, 1)
 	go func() { done <- a.app.Run() }()
@@ -46,6 +55,9 @@ func newTestApplication(t *testing.T, c Component) (*Application, tcell.Simulati
 	})
 	return a, screen
 }
+
+// keysHandled signals each key event a test application starts handling.
+var keysHandled = map[*Application]chan struct{}{}
 
 func addComponent(t *testing.T, a *Application, c Component) {
 	t.Helper()
@@ -69,18 +81,30 @@ func sync(t *testing.T, a *Application) {
 	}
 }
 
+// typeKeys sends keys to the application and waits until each has been
+// handled. Key events and updates reach the event loop through different
+// channels, so sync alone could run before the key is handled.
 func typeKeys(t *testing.T, a *Application, screen tcell.SimulationScreen, keys ...any) {
 	t.Helper()
+	press := func(key tcell.Key, r rune) {
+		t.Helper()
+		screen.InjectKey(key, r, tcell.ModNone)
+		select {
+		case <-keysHandled[a]:
+		case <-time.After(5 * time.Second):
+			t.Fatal("key was not handled")
+		}
+		// the key is being handled now; this update runs once that is done
+		sync(t, a)
+	}
 	for _, k := range keys {
 		switch k := k.(type) {
 		case string:
 			for _, r := range k {
-				screen.InjectKey(tcell.KeyRune, r, tcell.ModNone)
-				sync(t, a)
+				press(tcell.KeyRune, r)
 			}
 		case tcell.Key:
-			screen.InjectKey(k, 0, tcell.ModNone)
-			sync(t, a)
+			press(k, 0)
 		}
 	}
 }

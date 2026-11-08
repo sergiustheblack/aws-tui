@@ -40,11 +40,14 @@ docker run --rm -v "$PWD":/app -w /app -e GOOS=darwin -e GOARCH=arm64 golang:lat
 ### Driving the real app
 
 `hack/tui.sh` (needs tmux and python3) runs `./aws-tui` in a detached tmux
-session against `hack/fake_aws.py` (a local endpoint answering every call with
-two EC2 instances) with fake credentials, so no real AWS account is touched:
+session against `hack/fake_aws.py` (a local endpoint: Route 53 has zone
+`example.com` with records kept in memory, so edits can be tried; every other
+call gets two EC2 instances) with fake credentials, so no real AWS account is
+touched:
 
 ```sh
 hack/tui.sh start                 # extra env can follow, e.g. AWS_PROFILE=p1
+hack/tui.sh start -- --allow-write   # app flags go after --
 hack/tui.sh keys Down Down Down Down Down Down Down Enter Down Down Enter  # EC2 > Instances
 hack/tui.sh keys / d b            # prints the screen after the keys
 hack/tui.sh stop
@@ -87,6 +90,16 @@ get sort/filter.
   `AWS_SHARED_CREDENTIALS_FILE` are honored (the SDK does most of it;
   `readAWSProfiles` and `envProfile` cover the rest).
 - `ui.Table.SetData` drops stale rows when the data shrinks.
+- `--allow-write` flag (default off): without it the app never changes AWS
+  resources. Header shows `WRITE ENABLED` when on. Write calls live in the
+  repo and must check the flag themselves (`repo.ErrReadOnly`), and views add
+  their edit key actions only when it is set.
+- Route 53 records (`--allow-write` only): `n` new, `e` edit, `D` delete, via a
+  form (`route53_record_edit.go`) and a confirmation listing the change batch.
+  An edit is sent as DELETE old + CREATE new in one batch, so it fails rather
+  than overwrite a record changed in the meantime; routing policy fields are
+  kept. Relative names get the zone appended (`@` = apex). Alias records can
+  be deleted but not edited.
 
 ## Decisions & gotchas
 
@@ -99,4 +112,12 @@ get sort/filter.
   to it (the filter input looked "hung" after a region switch). `clearPages`
   calls `app.SetFocus(pages)` to fix that — keep it when touching `rebuild`.
 - The global key handler matches `KeyAction`s by `event.Name()`; while the
-  filter input is open it passes every key through to it.
+  filter input is open it passes every key through to it. Overlay pages
+  (`overlayPages` in `app.go`: picker, error, form, confirm) get all keys and
+  close on Escape; add new overlays there.
+- Tests must never reach AWS: point SDK clients at an `httptest` server
+  (see `newFakeRoute53Repo`) and never call `loadConfig`/`NewApplication`
+  with the real environment.
+- In app tests use `typeKeys`, which waits for each key to be handled: tview
+  reads key events and `QueueUpdate`s from different channels, so `sync`
+  alone can run before the key is handled.

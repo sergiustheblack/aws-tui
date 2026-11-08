@@ -50,11 +50,12 @@ type Application struct {
 	components  []Component
 	region      string
 	profile     string
+	allowWrite  bool
 	ctx         context.Context
 	cancel      context.CancelFunc
 }
 
-func buildRepos(cfg aws.Config) (Repos, *repo.STS) {
+func buildRepos(cfg aws.Config, allowWrite bool) (Repos, *repo.STS) {
 	// Global Accelerator requires us-west-2 regardless of selected region.
 	westCfg := cfg.Copy()
 	westCfg.Region = "us-west-2"
@@ -106,7 +107,7 @@ func buildRepos(cfg aws.Config) (Repos, *repo.STS) {
 		MQ:                repo.NewMQ(mqClient),
 		MSK:               repo.NewMSK(mskClient),
 		RDS:               repo.NewRDS(rdsClient),
-		Route53:           repo.NewRoute53(r53Client),
+		Route53:           repo.NewRoute53(r53Client, allowWrite),
 		S3:                repo.NewS3(s3Client),
 		SecretsManager:    repo.NewSecretsManager(smClient),
 		ServiceQuotas:     repo.NewServiceQuotas(sqClient),
@@ -146,17 +147,20 @@ func envProfile() string {
 	return os.Getenv("AWS_DEFAULT_PROFILE")
 }
 
-func NewApplication() *Application {
+// NewApplication creates the application. Unless allowWrite is set, it never
+// changes AWS resources.
+func NewApplication(allowWrite bool) *Application {
 	cfg, err := loadConfig("", "")
 	if err != nil {
 		panic(err)
 	}
 
-	repos, stsRepo := buildRepos(cfg)
+	repos, stsRepo := buildRepos(cfg, allowWrite)
 
 	a := &Application{
-		region:  cfg.Region,
-		profile: envProfile(),
+		region:     cfg.Region,
+		profile:    envProfile(),
+		allowWrite: allowWrite,
 	}
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 
@@ -195,7 +199,7 @@ func (a *Application) handleKey(event *tcell.EventKey) *tcell.EventKey {
 	frontName, _ := a.pages.GetFrontPage()
 
 	// dismiss overlays with Escape without disturbing the navigation stack
-	if frontName == "picker" || frontName == "error" {
+	if overlayPages[frontName] {
 		if event.Key() == tcell.KeyEscape {
 			a.pages.RemovePage(frontName)
 			a.app.SetFocus(a.pages)
@@ -230,6 +234,10 @@ func (a *Application) handleKey(event *tcell.EventKey) *tcell.EventKey {
 	return event
 }
 
+// overlayPages are the pages shown on top of the current component; they get
+// all keys and are dismissed with Escape.
+var overlayPages = map[string]bool{"picker": true, "error": true, "form": true, "confirm": true}
+
 func (a *Application) GetRegion() string {
 	return a.region
 }
@@ -247,7 +255,7 @@ func (a *Application) rebuild(profile, region string) {
 	a.profile = profile
 	a.region = cfg.Region
 
-	repos, stsRepo := buildRepos(cfg)
+	repos, stsRepo := buildRepos(cfg, a.allowWrite)
 	a.header.UpdateRepos(stsRepo, repos.IAM)
 
 	// Walk the current navigation stack backward to find the deepest component
@@ -305,6 +313,11 @@ func (a *Application) ShowError(err error) {
 	modal.Box.SetBackgroundColor(tcell.ColorDefault)
 	a.pages.AddPage("error", modal, false, true)
 	a.app.SetFocus(modal)
+}
+
+// AllowWrite reports whether the app may change AWS resources.
+func (a *Application) AllowWrite() bool {
+	return a.allowWrite
 }
 
 func (a *Application) refreshHandler() {

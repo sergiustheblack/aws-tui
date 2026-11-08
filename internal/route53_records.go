@@ -8,9 +8,10 @@ import (
 	"github.com/bporter816/aws-tui/internal/model"
 	"github.com/bporter816/aws-tui/internal/repo"
 	"github.com/bporter816/aws-tui/internal/utils"
+	"github.com/gdamore/tcell/v2"
 )
 
-func NewRoute53Records(repo *repo.Route53, zoneId string, app *Application) *TableView[model.Route53Record] {
+func NewRoute53Records(repo *repo.Route53, zoneId, zoneName string, app *Application) *TableView[model.Route53Record] {
 	return NewTableView(
 		"Route 53",
 		[]string{zoneId, "Records"},
@@ -89,6 +90,46 @@ func NewRoute53Records(repo *repo.Route53, zoneId string, app *Application) *Tab
 				*v.AliasTarget.DNSName,
 			}
 		},
-		nil,
+		func(v *TableView[model.Route53Record]) []KeyAction {
+			if !repo.AllowWrite() {
+				return nil
+			}
+			refresh := func() {
+				if err := v.Render(app.ctx); err != nil {
+					app.ShowError(err)
+				}
+			}
+			return []KeyAction{
+				{
+					Key:         tcell.NewEventKey(tcell.KeyRune, 'n', tcell.ModNone),
+					Description: "New Record",
+					Action: func() {
+						app.showRecordForm(repo, zoneId, zoneName, nil, refresh)
+					},
+				},
+				{
+					Key:         tcell.NewEventKey(tcell.KeyRune, 'e', tcell.ModNone),
+					Description: "Edit Record",
+					Action: func() {
+						record, err := v.Selected()
+						if err != nil {
+							return
+						}
+						app.showRecordForm(repo, zoneId, zoneName, &record, refresh)
+					},
+				},
+				{
+					Key:         tcell.NewEventKey(tcell.KeyRune, 'D', tcell.ModNone),
+					Description: "Delete Record",
+					Action: func() {
+						record, err := v.Selected()
+						if err != nil {
+							return
+						}
+						app.confirmRecordChanges(repo, zoneId, deleteRecordChanges(record), refresh)
+					},
+				},
+			}
+		},
 	)
 }

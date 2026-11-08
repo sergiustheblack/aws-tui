@@ -65,7 +65,11 @@ func NewRoute53HostedZones(repo *repo.Route53, app *Application) *TableView[mode
 		if err != nil {
 			return
 		}
-		recordsView := NewRoute53Records(repo, hostedZoneId, app)
+		zone, err := v.Selected()
+		if err != nil {
+			return
+		}
+		recordsView := NewRoute53Records(repo, hostedZoneId, utils.DerefString(zone.Name, ""), app)
 		app.AddAndSwitch(recordsView)
 	})
 	return v

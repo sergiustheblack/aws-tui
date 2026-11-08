@@ -77,6 +77,9 @@ func (h Header) Render(ctx context.Context) {
 	accountInfoStr += fmt.Sprintf("[orange::b]ARN:[white::-]     %v\n", arn)
 	accountInfoStr += fmt.Sprintf("[orange::b]User ID:[white::-] %v\n", userId)
 	accountInfoStr += fmt.Sprintf("[orange::b]Region:[white::-]  %v", region)
+	if h.app.AllowWrite() {
+		accountInfoStr += "  [red::b]WRITE ENABLED[white::-]"
+	}
 	h.accountInfo.SetText(accountInfoStr)
 
 	h.Box = tview.NewBox() // this is needed because the areas not covered by items are considered transparent and will linger otherwise

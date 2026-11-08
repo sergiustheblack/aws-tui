@@ -10,14 +10,43 @@ import (
 	"strings"
 )
 
+// ErrReadOnly is returned by calls that would change AWS resources when the
+// app was started without write access.
+var ErrReadOnly = errors.New("read-only mode: restart with --allow-write to make changes")
+
 type Route53 struct {
-	r53Client *r53.Client
+	r53Client  *r53.Client
+	allowWrite bool
 }
 
-func NewRoute53(r53Client *r53.Client) *Route53 {
+func NewRoute53(r53Client *r53.Client, allowWrite bool) *Route53 {
 	return &Route53{
-		r53Client: r53Client,
+		r53Client:  r53Client,
+		allowWrite: allowWrite,
 	}
+}
+
+func (r Route53) AllowWrite() bool {
+	return r.allowWrite
+}
+
+// ChangeRecords applies changes to the records of a hosted zone as a single
+// batch: either all of them succeed or none does.
+func (r Route53) ChangeRecords(ctx context.Context, hostedZoneId string, changes []r53Types.Change) error {
+	if !r.allowWrite {
+		return ErrReadOnly
+	}
+	if len(changes) == 0 {
+		return nil
+	}
+	_, err := r.r53Client.ChangeResourceRecordSets(
+		ctx,
+		&r53.ChangeResourceRecordSetsInput{
+			HostedZoneId: aws.String(hostedZoneId),
+			ChangeBatch:  &r53Types.ChangeBatch{Changes: changes},
+		},
+	)
+	return err
 }
 
 func (r Route53) ListHostedZones(ctx context.Context) ([]model.Route53HostedZone, error) {

@@ -9,16 +9,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var allowWrite bool
+
 var rootCmd = &cobra.Command{
 	Use: "aws-tui",
 	Run: func(cmd *cobra.Command, args []string) {
 		template.Init()
 
-		app := internal.NewApplication()
+		app := internal.NewApplication(allowWrite)
 		if err := app.Run(); err != nil {
 			panic(err)
 		}
 	},
+}
+
+func init() {
+	rootCmd.Flags().BoolVar(&allowWrite, "allow-write", false, "allow changing AWS resources (e.g. editing Route 53 records); read-only otherwise")
 }
 
 func Execute() {
