@@ -5,35 +5,79 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/bporter816/aws-tui/internal/model"
 )
 
 type S3 struct {
 	s3Client *s3.Client
+	// bucket name -> region; requests for a bucket in another region than the
+	// client's fail with 301 PermanentRedirect, so they are sent there instead
+	regions *sync.Map
 }
 
 func NewS3(s3Client *s3.Client) *S3 {
 	return &S3{
 		s3Client: s3Client,
+		regions:  &sync.Map{},
 	}
 }
 
 func (s S3) ListBuckets(ctx context.Context) ([]model.S3Bucket, error) {
-	out, err := s.s3Client.ListBuckets(
-		ctx,
-		&s3.ListBucketsInput{},
+	// BucketRegion is only returned when the request has a parameter
+	pg := s3.NewListBucketsPaginator(
+		s.s3Client,
+		&s3.ListBucketsInput{MaxBuckets: aws.Int32(10000)},
 	)
-	if err != nil {
-		return []model.S3Bucket{}, err
-	}
 	var buckets []model.S3Bucket
-	for _, v := range out.Buckets {
-		buckets = append(buckets, model.S3Bucket(v))
+	for pg.HasMorePages() {
+		out, err := pg.NextPage(ctx)
+		if err != nil {
+			return []model.S3Bucket{}, err
+		}
+		for _, v := range out.Buckets {
+			if v.Name != nil && v.BucketRegion != nil && *v.BucketRegion != "" {
+				s.regions.Store(*v.Name, *v.BucketRegion)
+			}
+			buckets = append(buckets, model.S3Bucket(v))
+		}
 	}
 	return buckets, nil
+}
+
+// inRegion returns an option that sends a request for the bucket to the
+// bucket's region, looking it up with HeadBucket if it isn't known yet.
+func (s S3) inRegion(ctx context.Context, bucketName string) func(*s3.Options) {
+	region, ok := s.regions.Load(bucketName)
+	if !ok {
+		if r := s.lookupRegion(ctx, bucketName); r != "" {
+			s.regions.Store(bucketName, r)
+			region, ok = r, true
+		}
+	}
+	return func(o *s3.Options) {
+		if ok {
+			o.Region = region.(string)
+		}
+	}
+}
+
+// lookupRegion reads the bucket region that S3 reports in a header even when
+// HeadBucket fails (redirect, access denied). Returns "" if unknown.
+func (s S3) lookupRegion(ctx context.Context, bucketName string) string {
+	out, err := s.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucketName)})
+	if err == nil {
+		return aws.ToString(out.BucketRegion)
+	}
+	var re interface{ HTTPResponse() *smithyhttp.Response }
+	if errors.As(err, &re) && re.HTTPResponse() != nil {
+		return re.HTTPResponse().Header.Get("X-Amz-Bucket-Region")
+	}
+	return ""
 }
 
 func (s S3) ListObjects(ctx context.Context, bucketName string, prefix string) ([]string, []string, error) {
@@ -45,9 +89,10 @@ func (s S3) ListObjects(ctx context.Context, bucketName string, prefix string) (
 			Prefix:    aws.String(prefix),
 		},
 	)
+	inRegion := s.inRegion(ctx, bucketName)
 	var prefixes, objects []string
 	for pg.HasMorePages() {
-		out, err := pg.NextPage(ctx)
+		out, err := pg.NextPage(ctx, inRegion)
 		if err != nil {
 			return []string{}, []string{}, err
 		}
@@ -67,6 +112,7 @@ func (s S3) GetBucketPolicy(ctx context.Context, bucketName string) (string, err
 		&s3.GetBucketPolicyInput{
 			Bucket: aws.String(bucketName),
 		},
+		s.inRegion(ctx, bucketName),
 	)
 	if err != nil || out.Policy == nil {
 		return "", err
@@ -80,6 +126,7 @@ func (s S3) GetCORSRules(ctx context.Context, bucketName string) ([]model.S3CORS
 		&s3.GetBucketCorsInput{
 			Bucket: aws.String(bucketName),
 		},
+		s.inRegion(ctx, bucketName),
 	)
 	if err != nil {
 		return []model.S3CORSRule{}, err
@@ -98,6 +145,7 @@ func (s S3) listBucketTags(ctx context.Context, bucketName string) (model.Tags, 
 		&s3.GetBucketTaggingInput{
 			Bucket: aws.String(bucketName),
 		},
+		s.inRegion(ctx, bucketName),
 	)
 	if err != nil {
 		return model.Tags{}, err
@@ -116,6 +164,7 @@ func (s S3) GetObject(ctx context.Context, bucketName string, key string) ([]byt
 			Bucket: aws.String(bucketName),
 			Key:    aws.String(key),
 		},
+		s.inRegion(ctx, bucketName),
 	)
 	if err != nil {
 		return []byte{}, err
@@ -138,6 +187,7 @@ func (s S3) GetObjectMetadata(ctx context.Context, bucketName string, key string
 			Bucket: aws.String(bucketName),
 			Key:    aws.String(key),
 		},
+		s.inRegion(ctx, bucketName),
 	)
 	if err != nil {
 		return model.Tags{}, err
@@ -159,6 +209,7 @@ func (s S3) listObjectTags(ctx context.Context, bucketName string, key string) (
 			Bucket: aws.String(bucketName),
 			Key:    aws.String(key),
 		},
+		s.inRegion(ctx, bucketName),
 	)
 	if err != nil {
 		return model.Tags{}, err

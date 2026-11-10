@@ -11,7 +11,7 @@ func NewS3Buckets(repo *repo.S3, app *Application) *TableView[model.S3Bucket] {
 	v := NewTableView(
 		"S3",
 		[]string{"Buckets"},
-		[]string{"NAME", "CREATED"},
+		[]string{"NAME", "REGION", "CREATED"},
 		repo.ListBuckets,
 		func(b model.S3Bucket) []string {
 			var created string
@@ -20,6 +20,7 @@ func NewS3Buckets(repo *repo.S3, app *Application) *TableView[model.S3Bucket] {
 			}
 			return []string{
 				utils.DerefString(b.Name, ""),
+				utils.DerefString(b.BucketRegion, ""),
 				created,
 			}
 		},

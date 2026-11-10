@@ -100,6 +100,10 @@ get sort/filter.
   than overwrite a record changed in the meantime; routing policy fields are
   kept. Relative names get the zone appended (`@` = apex). Alias records can
   be deleted but not edited.
+- S3 buckets in a region other than the selected one work: `repo.S3` caches
+  each bucket's region (from `ListBuckets`' `BucketRegion`, else the
+  `x-amz-bucket-region` header of `HeadBucket`) and sends that bucket's calls
+  there (`inRegion`). Bucket list shows a REGION column.
 
 ## Decisions & gotchas
 
