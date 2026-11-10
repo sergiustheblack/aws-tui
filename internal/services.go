@@ -71,6 +71,21 @@ func (s Services) selectHandler(n *tview.TreeNode) {
 	s.app.AddAndSwitch(f(s.repos, s.app))
 }
 
+// ExpandService expands the node of the given service and selects its first
+// view.
+func (s Services) ExpandService(service string) {
+	for _, n := range s.Root.GetChildren() {
+		if n.GetText() != service {
+			continue
+		}
+		n.Expand()
+		if len(n.GetChildren()) > 0 {
+			s.SetCurrentNode(n.GetChildren()[0])
+		}
+		return
+	}
+}
+
 func (s Services) GetKeyActions() []KeyAction {
 	return []KeyAction{}
 }

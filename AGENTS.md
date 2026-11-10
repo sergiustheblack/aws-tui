@@ -104,6 +104,13 @@ get sort/filter.
   each bucket's region (from `ListBuckets`' `BucketRegion`, else the
   `x-amz-bucket-region` header of `HeadBucket`) and sends that bucket's calls
   there (`inRegion`). Bucket list shows a REGION column.
+- `aws-tui <service> [view]` (e.g. `s3`, `route53`, `ec2 security groups`)
+  opens that view on top of the services tree (`internal/start.go`). Names
+  match case-insensitively ignoring spaces/punctuation; a unique prefix or
+  substring is enough, `serviceAliases` adds extra names (`ssm`). A service
+  with one view opens it; one with several opens `defaultViews[service]` if
+  set, else the tree with that service expanded. Bad names exit with an error
+  before the UI starts.
 
 ## Decisions & gotchas
 
